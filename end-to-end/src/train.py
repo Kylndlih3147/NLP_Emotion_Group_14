@@ -223,7 +223,7 @@ def train(
     Train single-stage 7-class model.
 
     Returns:
-        dict with keys: run_dir, run_name, best_val_loss,
+        dict with keys: run_dir, run_name, best_val_macro_f1,
                         best_epoch, best_metrics, log_path, checkpoint_path.
     """
     cfg       = load_config(config_path)
@@ -292,7 +292,7 @@ def train(
                          len(train_loader.dataset), len(val_loader.dataset))
 
     # ── Training loop ─────────────────────────────────────────────────────────
-    best_val_loss = float("inf")
+    best_val_macro_f1 = -1.0
     best_metrics: Dict[str, float] = {}
     best_epoch    = 0
     no_improve    = 0
@@ -332,8 +332,8 @@ def train(
         with open(log_path, "a", newline="") as f:
             csv.DictWriter(f, fieldnames=csv_fields).writerow(row)
 
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
+        if val_metrics.get("macro_f1", 0) > best_val_macro_f1:
+            best_val_macro_f1 = val_metrics.get("macro_f1", 0)
             best_metrics  = val_metrics.copy()
             best_epoch    = epoch
             no_improve    = 0
@@ -346,7 +346,7 @@ def train(
                 "model_state":     model.state_dict(),
                 "optimizer":       optimizer.state_dict(),
                 "scheduler":       scheduler.state_dict() if scheduler else None,
-                "val_loss":        best_val_loss,
+                "val_macro_f1":    best_val_macro_f1,
                 "val_metrics":     best_metrics,
                 "threshold":       threshold,
                 "cfg":             cfg,
@@ -361,19 +361,19 @@ def train(
             print(f"[train] Early stopping at epoch {epoch} ({patience} epochs no improve).")
             break
 
-    print(f"\n[train] Done — best val_loss={best_val_loss:.4f} @ epoch {best_epoch}")
+    print(f"\n[train] Done — best val_macro_f1={best_val_macro_f1:.4f} @ epoch {best_epoch}")
     for k, v in best_metrics.items():
         print(f"        {k}={v:.4f}")
     print(f"[train] log → {log_path}")
 
     return {
-        "run_dir":         run_dir,
-        "run_name":        run_name,
-        "best_val_loss":   best_val_loss,
-        "best_epoch":      best_epoch,
-        "best_metrics":    best_metrics,
-        "log_path":        log_path,
-        "checkpoint_path": ckpt_path,
+        "run_dir":            run_dir,
+        "run_name":           run_name,
+        "best_val_macro_f1":  best_val_macro_f1,
+        "best_epoch":         best_epoch,
+        "best_metrics":       best_metrics,
+        "log_path":           log_path,
+        "checkpoint_path":    ckpt_path,
     }
 
 
