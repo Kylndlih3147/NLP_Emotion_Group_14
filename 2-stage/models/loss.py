@@ -25,7 +25,7 @@ import torch.nn.functional as F
 
 __all__ = ["BCELoss", "FocalBCELoss", "AsymmetricLoss", "TieredPerClassASL", "get_loss_fn"]
 
-_EPS = 1e-8
+_EPS = 1e-7
 
 
 # =============================================================================
@@ -98,7 +98,7 @@ class AsymmetricLoss(nn.Module):
         p  = torch.sigmoid(logits)
 
         # Positive branch — clamp p away from 0
-        p_safe = p.clamp(min=_EPS)
+        p_safe = p.clamp(min=_EPS, max=1.0-_EPS)
         lp = targets * torch.log(p_safe)
         if self.gamma_pos > 0:
             lp = ((1.0 - p) ** self.gamma_pos) * lp

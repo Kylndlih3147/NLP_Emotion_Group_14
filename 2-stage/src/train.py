@@ -131,7 +131,7 @@ def _run_epoch(
 
             with torch.autocast(device_type=device.type, dtype=amp_dtype, enabled=use_amp):
                 logits = model(ids, mask)
-                loss   = criterion(logits, lbls)
+                loss = criterion(logits.float(), lbls.float())
 
             if is_train:
                 if scaler is not None:
