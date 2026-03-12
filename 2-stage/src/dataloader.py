@@ -344,8 +344,11 @@ def compute_pos_weight_stage2(
     # pos_count[c]  = number of samples where class c == 1
     # neg_count[c]  = number of samples where class c == 0
     # These are per-class and always sum to N, so neg_count is always >= 0.
-    label_counts = dataset.labels_6.sum(axis=0).clip(min=1.0)        # (C,) pos counts
-    neg_counts   = np.maximum(n - label_counts, 1.0)                  # (C,) true per-class neg counts
+    labels_mat   = dataset.labels_6
+    pos_counts   = (labels_mat > 0).sum(axis=0).astype(np.float64)  # đếm số ROWS có class đó → luôn <= n
+    pos_counts   = np.maximum(pos_counts, 1.0)
+    neg_counts   = np.maximum(n - pos_counts, 1.0)                   # luôn >= 0
+    label_counts = pos_counts                  # (C,) true per-class neg counts
 
     scale_map = np.ones(NUM_EMOTIONS, dtype=np.float32)
     for idx in tier_indices.get("very_rare", []):

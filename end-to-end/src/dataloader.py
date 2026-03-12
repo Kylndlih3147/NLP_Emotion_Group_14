@@ -254,8 +254,11 @@ def compute_pos_weight(
     tier_indices:       Dict[str, List[int]],
 ) -> torch.Tensor:
     n            = len(dataset)
-    label_counts = dataset.labels_7.sum(axis=0).clip(min=1)  # tránh /0
-    neg_counts   = np.maximum(n - label_counts, 1.0)          # tránh âm
+    labels_mat   = dataset.labels_6
+    pos_counts   = (labels_mat > 0).sum(axis=0).astype(np.float64)  # đếm số ROWS có class đó → luôn <= n
+    pos_counts   = np.maximum(pos_counts, 1.0)
+    neg_counts   = np.maximum(n - pos_counts, 1.0)                   # luôn >= 0
+    label_counts = pos_counts        # tránh âm
 
     scale_map = np.ones(NUM_CLASSES, dtype=np.float32)
     for idx in tier_indices.get("very_rare", []):
