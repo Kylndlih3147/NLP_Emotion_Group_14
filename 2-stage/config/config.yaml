@@ -30,7 +30,7 @@ data:
   val_file:   "data1_val.csv"      # ignored when auto_split: true
   test_file:  "data1_test.csv"     # ignored when auto_split: true
 
-  auto_split:  true      # split train_file → train / val / test
+  auto_split:  false      # split train_file → train / val / test
   val_ratio:   0.10
   test_ratio:  0.10
 
