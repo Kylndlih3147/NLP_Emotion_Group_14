@@ -14,9 +14,9 @@ Three-tier imbalance strategy for Stage 2
 Class counts in data1_train.csv:
   joy      19,794   ┐
   anger     7,813   │ common  (count ≥ median)
-  surprise  5,418   ┘
-  sadness   5,392   ┐
-  disgust   3,366   ┘ rare    (median/3 ≤ count < median)
+  surprise  5,418   │
+  sadness   5,392   ┘
+  disgust   3,366     rare    (median/3 ≤ count < median)
   fear      1,941     very_rare (count < median/3)
 
   joy/fear ratio ≈ 10×  →  three separate treatment tiers:
@@ -32,10 +32,14 @@ Class counts in data1_train.csv:
       rare:      boost_rare      (default 3×)
 
   Layer 3 – pos_weight:
-      per-tier pw_scale exponent applied to ((N-n_pos)/n_pos)
-      very_rare: pw_scale_very_rare (default 2.0)
+      per-tier pw_scale multiplier applied to ((N-n_pos)/n_pos)
+      very_rare: pw_scale_very_rare (default 3.0)  ← multiply, NOT exponent
       rare:      pw_scale_rare      (default 1.5)
       common:    pw_scale_common    (default 1.0)
+
+num_workers:
+    Set via config['data']['num_workers'] (default 4).
+    Pass 0 to disable multiprocessing (useful for debugging or Windows).
 """
 
 from __future__ import annotations
@@ -68,8 +72,8 @@ BACKBONE_REGISTRY: Dict[str, Dict[str, str]] = {
 #  Label metadata
 # =============================================================================
 
-EMOTION_NAMES: List[str] = ["anger", "disgust", "fear", "joy", "sadness", "surprise"]
-NUM_EMOTIONS:  int        = len(EMOTION_NAMES)   # 6
+EMOTION_NAMES:   List[str] = ["anger", "disgust", "fear", "joy", "sadness", "surprise"]
+NUM_EMOTIONS:    int        = len(EMOTION_NAMES)   # 6
 ALL_CLASS_NAMES: List[str] = EMOTION_NAMES + ["neutral"]
 NUM_ALL_CLASSES: int        = 7
 
@@ -79,31 +83,31 @@ NUM_ALL_CLASSES: int        = 7
 # =============================================================================
 
 _SYNONYM_MAP: Dict[str, List[str]] = {
-    "happy":       ["glad", "pleased", "delighted", "joyful"],
-    "good":        ["great", "wonderful", "fantastic", "excellent"],
-    "bad":         ["terrible", "awful", "horrible", "dreadful"],
-    "sad":         ["unhappy", "miserable", "sorrowful", "depressed"],
-    "angry":       ["furious", "enraged", "mad", "irritated"],
-    "scared":      ["afraid", "frightened", "terrified", "anxious"],
-    "love":        ["adore", "cherish", "treasure", "care about"],
-    "hate":        ["despise", "loathe", "detest", "dislike"],
-    "think":       ["believe", "feel", "consider", "reckon"],
-    "amazing":     ["incredible", "awesome", "remarkable", "stunning"],
-    "hard":        ["difficult", "tough", "challenging", "demanding"],
-    "hope":        ["wish", "expect", "trust", "anticipate"],
-    "worry":       ["fear", "dread", "fret", "stress"],
-    "thankful":    ["grateful", "appreciative", "blessed"],
-    "proud":       ["honored", "pleased", "satisfied", "glad"],
-    "awful":       ["terrible", "dreadful", "horrible", "atrocious"],
-    "excited":     ["thrilled", "enthusiastic", "eager", "pumped"],
-    "surprised":   ["shocked", "astonished", "stunned", "amazed"],
-    "fearful":     ["terrified", "petrified", "alarmed", "horrified"],
-    "disgusted":   ["revolted", "repulsed", "sickened", "appalled"],
-    "furious":     ["enraged", "livid", "irate", "outraged"],
-    "depressed":   ["despondent", "devastated", "heartbroken", "gloomy"],
-    "joyful":      ["ecstatic", "elated", "overjoyed", "blissful"],
-    "nervous":     ["anxious", "apprehensive", "uneasy", "tense"],
-    "shocked":     ["stunned", "astounded", "flabbergasted", "aghast"],
+    "happy":     ["glad", "pleased", "delighted", "joyful"],
+    "good":      ["great", "wonderful", "fantastic", "excellent"],
+    "bad":       ["terrible", "awful", "horrible", "dreadful"],
+    "sad":       ["unhappy", "miserable", "sorrowful", "depressed"],
+    "angry":     ["furious", "enraged", "mad", "irritated"],
+    "scared":    ["afraid", "frightened", "terrified", "anxious"],
+    "love":      ["adore", "cherish", "treasure", "care about"],
+    "hate":      ["despise", "loathe", "detest", "dislike"],
+    "think":     ["believe", "feel", "consider", "reckon"],
+    "amazing":   ["incredible", "awesome", "remarkable", "stunning"],
+    "hard":      ["difficult", "tough", "challenging", "demanding"],
+    "hope":      ["wish", "expect", "trust", "anticipate"],
+    "worry":     ["fear", "dread", "fret", "stress"],
+    "thankful":  ["grateful", "appreciative", "blessed"],
+    "proud":     ["honored", "pleased", "satisfied", "glad"],
+    "awful":     ["terrible", "dreadful", "horrible", "atrocious"],
+    "excited":   ["thrilled", "enthusiastic", "eager", "pumped"],
+    "surprised": ["shocked", "astonished", "stunned", "amazed"],
+    "fearful":   ["terrified", "petrified", "alarmed", "horrified"],
+    "disgusted": ["revolted", "repulsed", "sickened", "appalled"],
+    "furious":   ["enraged", "livid", "irate", "outraged"],
+    "depressed": ["despondent", "devastated", "heartbroken", "gloomy"],
+    "joyful":    ["ecstatic", "elated", "overjoyed", "blissful"],
+    "nervous":   ["anxious", "apprehensive", "uneasy", "tense"],
+    "shocked":   ["stunned", "astounded", "flabbergasted", "aghast"],
 }
 
 
@@ -126,24 +130,24 @@ def _synonym_replace(text: str, n: int = 2, seed: int = None) -> str:
 # =============================================================================
 
 def compute_tiers(
-    label_counts:     np.ndarray,
-    very_rare_div:    float = 3.0,
-    rare_div:         float = 1.0,
+    label_counts:  np.ndarray,
+    very_rare_div: float = 3.0,
+    rare_div:      float = 1.0,
 ) -> Tuple[List[int], List[int], List[int]]:
     """
     Classify class indices into three tiers based on count vs median.
 
     Args:
         label_counts:  (C,) array of per-class positive counts.
-        very_rare_div: threshold = median / very_rare_div
-        rare_div:      threshold = median / rare_div  (= median when rare_div=1)
+        very_rare_div: very_rare threshold = median / very_rare_div
+        rare_div:      rare threshold      = median / rare_div  (= median when 1.0)
 
     Returns:
         (very_rare_indices, rare_indices, common_indices)
     """
-    median = float(np.median(label_counts))
+    median           = float(np.median(label_counts))
     thresh_very_rare = median / very_rare_div
-    thresh_rare      = median / rare_div       # = median
+    thresh_rare      = median / rare_div
 
     very_rare, rare, common = [], [], []
     for i, c in enumerate(label_counts):
@@ -166,23 +170,23 @@ class EkmanDataset(Dataset):
     Dataset for two-stage Ekman classification.
 
     Args:
-        texts:              List[str]
-        labels_6:           (N, 6) float32 — one-hot 6 Ekman emotions
-        tokenizer:          HuggingFace tokenizer
-        max_length:         int
-        stage:              "stage1" → binary label (1,)
-                            "stage2" → 6-hot label (6,)
-        emotion_only:       Filter to emotion-positive samples (stage2 training)
-        augment_rare:       Apply synonym replacement augmentation
+        texts:               List[str]
+        labels_6:            (N, 6) float32 — one-hot 6 Ekman emotions
+        tokenizer:           HuggingFace tokenizer
+        max_length:          int
+        stage:               "stage1" → binary label (1,)
+                             "stage2" → 6-hot label (6,)
+        emotion_only:        Filter to emotion-positive samples (stage2 training)
+        augment_rare:        Apply synonym replacement augmentation
         aug_copies_per_tier: dict with keys "very_rare", "rare", "common" → int
-        tier_indices:       dict with keys "very_rare", "rare", "common" → List[int]
+        tier_indices:        dict with keys "very_rare", "rare", "common" → List[int]
     """
 
     def __init__(
         self,
         texts:               List[str],
         labels_6:            np.ndarray,
-        tokenizer:           AutoTokenizer,
+        tokenizer,
         max_length:          int  = 128,
         stage:               str  = "stage2",
         emotion_only:        bool = False,
@@ -231,8 +235,8 @@ class EkmanDataset(Dataset):
                       f"{n_tier} samples × {copies} copies → +{n_tier * copies}")
 
             if extra_texts:
-                texts    = list(texts) + extra_texts
-                labels_6 = np.vstack([labels_6, np.array(extra_labels)])
+                texts       = list(texts) + extra_texts
+                labels_6    = np.vstack([labels_6, np.array(extra_labels)])
                 has_emotion = (labels_6.sum(axis=1) > 0).astype(np.float32)
 
         self.texts       = list(texts)
@@ -266,17 +270,17 @@ class EkmanDataset(Dataset):
 # =============================================================================
 
 def build_weighted_sampler(
-    dataset:      EkmanDataset,
-    sampler_power: float,
+    dataset:         EkmanDataset,
+    sampler_power:   float,
     boost_very_rare: float,
     boost_rare:      float,
     boost_common:    float,
-    tier_indices:   Dict[str, List[int]],
+    tier_indices:    Dict[str, List[int]],
 ) -> WeightedRandomSampler:
     """Three-tier WeightedRandomSampler for Stage 2."""
     labels_mat   = dataset.labels_6
     label_counts = labels_mat.sum(axis=0).clip(min=1)
-    inv_freq     = (1.0 / label_counts) ** sampler_power    # (6,)
+    inv_freq     = (1.0 / label_counts) ** sampler_power   # (6,)
 
     # Base weight = mean of inv_freq for the classes present in that sample
     sample_weights = np.zeros(len(dataset), dtype=np.float64)
@@ -285,19 +289,12 @@ def build_weighted_sampler(
         sample_weights[i] = inv_freq[pos].mean() if pos.any() else inv_freq.min()
 
     # Per-tier boost
-    boost_map = {
-        "very_rare": boost_very_rare,
-        "rare":      boost_rare,
-        "common":    boost_common,
-    }
-    for tier, boost in boost_map.items():
+    for tier, boost in {"very_rare": boost_very_rare, "rare": boost_rare, "common": boost_common}.items():
         if boost <= 1.0:
             continue
         idx = tier_indices.get(tier, [])
-        if not idx:
-            continue
-        mask = labels_mat[:, idx].sum(axis=1) > 0
-        sample_weights[mask] *= boost
+        if idx:
+            sample_weights[labels_mat[:, idx].sum(axis=1) > 0] *= boost
 
     return WeightedRandomSampler(
         weights=torch.from_numpy(sample_weights).float(),
@@ -316,9 +313,10 @@ def compute_pos_weight_stage1(
     scale:   float = 1.0,
 ) -> torch.Tensor:
     """(1,) pos_weight for Stage 1 binary BCE."""
-    n_emotion = float(dataset.has_emotion.sum().clip(min=1))
-    n_neutral = float(len(dataset) - n_emotion)
+    n_emotion = max(float(dataset.has_emotion.sum()), 1.0)
+    n_neutral = max(float(len(dataset) - n_emotion), 1.0)
     pw = (n_neutral / n_emotion) * scale
+    pw = float(np.clip(pw, 0.01, 200.0))
     return torch.tensor([pw], dtype=torch.float32, device=device)
 
 
@@ -332,10 +330,15 @@ def compute_pos_weight_stage2(
 ) -> torch.Tensor:
     """
     (6,) per-class pos_weight for Stage 2.
-    Each class gets a tier-specific pw_scale exponent.
+
+    Formula: pw[c] = (neg_count[c] / pos_count[c]) * scale[c]
+    where scale[c] is the tier-specific multiplier.
+
+    NOTE: uses multiply (*), NOT exponent (**), to keep values stable.
     """
     n            = len(dataset)
-    label_counts = dataset.labels_6.sum(axis=0).clip(min=1)
+    label_counts = dataset.labels_6.sum(axis=0).clip(min=1.0)
+    neg_counts   = np.maximum(n - label_counts, 1.0)   # guard against negatives for tiny data
 
     scale_map = np.ones(NUM_EMOTIONS, dtype=np.float32)
     for idx in tier_indices.get("very_rare", []):
@@ -345,7 +348,13 @@ def compute_pos_weight_stage2(
     for idx in tier_indices.get("common", []):
         scale_map[idx] = pw_scale_common
 
-    pw = ((n - label_counts) / label_counts) * scale_map
+    pw = (neg_counts / label_counts) * scale_map        # ← multiply, NOT **
+    pw = np.clip(pw, 0.01, 200.0)                       # safety clamp
+
+    print(f"[DataLoader] pos_weight (stage2):")
+    for i, name in enumerate(EMOTION_NAMES):
+        print(f"    {name:<12}: {pw[i]:.2f}")
+
     return torch.tensor(pw, dtype=torch.float32, device=device)
 
 
@@ -360,9 +369,7 @@ def _load_csv(filepath: str) -> Tuple[List[str], np.ndarray]:
         raise ValueError(f"Missing columns {missing} in {filepath}")
     if "text" not in df.columns:
         raise ValueError(f"'text' column not found in {filepath}")
-    texts    = df["text"].astype(str).tolist()
-    labels_6 = df[EMOTION_NAMES].values.astype(np.float32)
-    return texts, labels_6
+    return df["text"].astype(str).tolist(), df[EMOTION_NAMES].values.astype(np.float32)
 
 
 def _split_data(
@@ -375,21 +382,38 @@ def _split_data(
     """Stratified split preserving has_emotion balance."""
     strat = (labels_6.sum(axis=1) > 0).astype(int)
     tv_t, test_t, tv_l, test_l = train_test_split(
-        texts, labels_6, test_size=test_ratio, random_state=seed,
-        stratify=strat,
+        texts, labels_6, test_size=test_ratio, random_state=seed, stratify=strat,
     )
     strat2 = (tv_l.sum(axis=1) > 0).astype(int)
     tr_t, val_t, tr_l, val_l = train_test_split(
         tv_t, tv_l,
-        test_size=val_ratio / (1.0 - test_ratio), random_state=seed,
-        stratify=strat2,
+        test_size=val_ratio / (1.0 - test_ratio), random_state=seed, stratify=strat2,
     )
     return tr_t, tr_l, val_t, val_l, test_t, test_l
 
 
 # =============================================================================
-#  Main factory
+#  DataLoader factory
 # =============================================================================
+
+def _make_loader(
+    dataset:     EkmanDataset,
+    batch_size:  int,
+    shuffle:     bool,
+    num_workers: int,
+    sampler=None,
+) -> DataLoader:
+    """Helper to build a DataLoader with consistent settings."""
+    return DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=(shuffle and sampler is None),
+        sampler=sampler,
+        num_workers=num_workers,
+        pin_memory=True,
+        persistent_workers=(num_workers > 0),
+    )
+
 
 def get_dataloaders(
     cfg:   dict,
@@ -398,11 +422,14 @@ def get_dataloaders(
     """
     Build train/val/test DataLoaders for the given stage.
 
+    num_workers is read from cfg['data']['num_workers'] (default 4).
+    Set to 0 in your config to disable multiprocessing (useful for debugging).
+
     Returns:
         (train_loader, val_loader, test_loader, info_dict)
 
-    info_dict keys: emotion_names, pos_weight, label_counts,
-                    tier_indices, num_labels, pretrained
+    info_dict keys:
+        emotion_names, pos_weight, label_counts, tier_indices, num_labels, pretrained
     """
     assert stage in ("stage1", "stage2"), f"Unknown stage '{stage}'"
 
@@ -410,12 +437,13 @@ def get_dataloaders(
     stage_cfg = cfg[stage]
     train_cfg = stage_cfg["training"]
 
-    data_dir     = data_cfg["data_dir"]
-    max_length   = int(data_cfg.get("max_length", 128))
-    batch_size   = int(train_cfg.get("batch_size", 32))
-    seed         = int(data_cfg.get("seed", 42))
-    auto_split   = bool(data_cfg.get("auto_split", True))
-    num_workers  = int(data_cfg.get("num_workers", 4))
+    data_dir    = data_cfg["data_dir"]
+    max_length  = int(data_cfg.get("max_length",  128))
+    batch_size  = int(train_cfg.get("batch_size", 32))
+    seed        = int(data_cfg.get("seed",        42))
+    auto_split  = bool(data_cfg.get("auto_split", True))
+    # ── num_workers from config — set 0 to disable multiprocessing ───────────
+    num_workers = int(data_cfg.get("num_workers", 4))
 
     model_name = stage_cfg["model"]["name"].lower()
     if model_name not in BACKBONE_REGISTRY:
@@ -432,8 +460,9 @@ def get_dataloaders(
     test_path  = os.path.join(data_dir, data_cfg.get("test_file",  "data1_test.csv"))
 
     if auto_split and (not os.path.isfile(val_path) or not os.path.isfile(test_path)):
-        print(f"[DataLoader] Auto-splitting '{train_path}'  "
-              f"→ train/{data_cfg.get('val_ratio',0.1):.0%}/test {data_cfg.get('test_ratio',0.1):.0%}")
+        print(f"[DataLoader] Auto-splitting '{train_path}' "
+              f"→ val={data_cfg.get('val_ratio', 0.1):.0%} / "
+              f"test={data_cfg.get('test_ratio', 0.1):.0%}")
         all_t, all_l = _load_csv(train_path)
         train_texts, train_labels, val_texts, val_labels, test_texts, test_labels = \
             _split_data(all_t, all_l,
@@ -449,25 +478,20 @@ def get_dataloaders(
         test_texts,  test_labels  = _load_csv(test_path)
 
     # ── Compute tiers from TRAIN label counts ─────────────────────────────────
-    train_counts   = train_labels.sum(axis=0)
-    very_rare_div  = float(train_cfg.get("very_rare_divisor", 3.0))
-    rare_div       = float(train_cfg.get("rare_divisor",      1.0))
-    very_rare_idx, rare_idx, common_idx = compute_tiers(
-        train_counts, very_rare_div, rare_div
-    )
-    tier_indices = {
-        "very_rare": very_rare_idx,
-        "rare":      rare_idx,
-        "common":    common_idx,
-    }
-    print(f"[DataLoader] Stage={stage}  backbone={model_name}")
+    train_counts  = train_labels.sum(axis=0)
+    very_rare_div = float(train_cfg.get("very_rare_divisor", 3.0))
+    rare_div      = float(train_cfg.get("rare_divisor",      1.0))
+    very_rare_idx, rare_idx, common_idx = compute_tiers(train_counts, very_rare_div, rare_div)
+    tier_indices = {"very_rare": very_rare_idx, "rare": rare_idx, "common": common_idx}
+
+    print(f"[DataLoader] Stage={stage}  backbone={model_name}  num_workers={num_workers}")
     print(f"[DataLoader] Tier breakdown (train counts):")
     for i, name in enumerate(EMOTION_NAMES):
         tier = ("very_rare" if i in very_rare_idx else
                 "rare"      if i in rare_idx else "common")
         print(f"    {name:<12}: {int(train_counts[i]):>6}  [{tier}]")
 
-    # ── Stage-specific dataset config ────────────────────────────────────────
+    # ── Stage-specific dataset config ─────────────────────────────────────────
     emotion_only_train = (stage == "stage2")
     augment_rare       = bool(train_cfg.get("augment_rare", False))
     aug_copies = {
@@ -486,52 +510,43 @@ def get_dataloaders(
     val_ds = EkmanDataset(
         val_texts, val_labels, tokenizer, max_length,
         stage=stage, emotion_only=emotion_only_train,
-        augment_rare=False,
     )
     test_ds = EkmanDataset(
         test_texts, test_labels, tokenizer, max_length,
         stage=stage, emotion_only=emotion_only_train,
-        augment_rare=False,
     )
 
-    # ── Sampler ───────────────────────────────────────────────────────────────
+    # ── Sampler (Stage 2 only) ────────────────────────────────────────────────
+    sampler = None
     use_sampler = bool(train_cfg.get("use_weighted_sampler", stage == "stage2"))
-
     if use_sampler and stage == "stage2":
         sampler = build_weighted_sampler(
             train_ds,
-            sampler_power=float(train_cfg.get("sampler_power", 2.0)),
-            boost_very_rare=float(train_cfg.get("boost_very_rare", 5.0)),
-            boost_rare=     float(train_cfg.get("boost_rare",      3.0)),
-            boost_common=   float(train_cfg.get("boost_common",    1.0)),
+            sampler_power=   float(train_cfg.get("sampler_power",   2.0)),
+            boost_very_rare= float(train_cfg.get("boost_very_rare", 5.0)),
+            boost_rare=      float(train_cfg.get("boost_rare",      3.0)),
+            boost_common=    float(train_cfg.get("boost_common",    1.0)),
             tier_indices=tier_indices,
         )
-        train_loader = DataLoader(
-            train_ds, batch_size=batch_size, sampler=sampler,
-            num_workers=num_workers, pin_memory=True,
-            persistent_workers=(num_workers > 0),
-        )
-    else:
-        train_loader = DataLoader(
-            train_ds, batch_size=batch_size, shuffle=True,
-            num_workers=num_workers, pin_memory=True,
-            persistent_workers=(num_workers > 0),
-        )
 
-    val_loader  = DataLoader(val_ds,  batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True,persistent_workers=(num_workers > 0))
-    test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True,persistent_workers=(num_workers > 0))
+    train_loader = _make_loader(train_ds, batch_size, shuffle=True,  num_workers=num_workers, sampler=sampler)
+    val_loader   = _make_loader(val_ds,   batch_size, shuffle=False, num_workers=num_workers)
+    test_loader  = _make_loader(test_ds,  batch_size, shuffle=False, num_workers=num_workers)
 
     # ── pos_weight ────────────────────────────────────────────────────────────
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     if stage == "stage1":
-        pw_scale  = float(train_cfg.get("pw_scale", 1.0))
-        pos_weight = compute_pos_weight_stage1(train_ds, device, scale=pw_scale)
+        pos_weight = compute_pos_weight_stage1(
+            train_ds, device,
+            scale=float(train_cfg.get("pw_scale", 1.0)),
+        )
         num_labels = 1
+        print(f"[DataLoader] pos_weight (stage1): {pos_weight.item():.2f}")
     else:
         pos_weight = compute_pos_weight_stage2(
             train_ds, device,
-            pw_scale_very_rare=float(train_cfg.get("pw_scale_very_rare", 2.0)),
+            pw_scale_very_rare=float(train_cfg.get("pw_scale_very_rare", 3.0)),
             pw_scale_rare=     float(train_cfg.get("pw_scale_rare",      1.5)),
             pw_scale_common=   float(train_cfg.get("pw_scale_common",    1.0)),
             tier_indices=tier_indices,
@@ -544,10 +559,6 @@ def get_dataloaders(
     label_counts_dict.update({"has_emotion": ne, "neutral": len(train_ds) - ne})
 
     print(f"[DataLoader] Train: {len(train_ds)} | Val: {len(val_ds)} | Test: {len(test_ds)}")
-    if stage == "stage2":
-        print(f"[DataLoader] pos_weight:")
-        for i, name in enumerate(EMOTION_NAMES):
-            print(f"    {name:<12}: {pos_weight[i].item():.2f}")
 
     return train_loader, val_loader, test_loader, {
         "emotion_names": EMOTION_NAMES,
@@ -576,8 +587,7 @@ def get_raw_splits(cfg: dict) -> Tuple:
                            val_ratio=float(data_cfg.get("val_ratio",  0.10)),
                            test_ratio=float(data_cfg.get("test_ratio", 0.10)),
                            seed=seed)
-    else:
-        tr_t, tr_l = _load_csv(train_path)
-        va_t, va_l = _load_csv(val_path)
-        te_t, te_l = _load_csv(test_path)
-        return tr_t, tr_l, va_t, va_l, te_t, te_l
+    tr_t, tr_l = _load_csv(train_path)
+    va_t, va_l = _load_csv(val_path)
+    te_t, te_l = _load_csv(test_path)
+    return tr_t, tr_l, va_t, va_l, te_t, te_l
