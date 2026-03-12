@@ -34,6 +34,7 @@ import torch
 from sklearn.metrics import (
     classification_report, confusion_matrix, hamming_loss,
     f1_score, precision_score, recall_score, accuracy_score,
+    precision_recall_curve, average_precision_score,
 )
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -157,6 +158,75 @@ def _plot_threshold_bar(ts, names, path, title=""):
     plt.close(fig)
 
 
+def _plot_pr_curve_binary(y_true, y_probs, path, title=""):
+    """PR curve for binary classification (Stage 1)."""
+    precision, recall, _ = precision_recall_curve(y_true, y_probs)
+    ap = average_precision_score(y_true, y_probs)
+    fig, ax = plt.subplots(figsize=(7, 5))
+    ax.plot(recall, precision, color="#2980b9", linewidth=2, label=f"AP = {ap:.3f}")
+    ax.fill_between(recall, precision, alpha=0.15, color="#2980b9")
+    ax.set_xlabel("Recall")
+    ax.set_ylabel("Precision")
+    ax.set_xlim(0, 1.02)
+    ax.set_ylim(0, 1.05)
+    ax.set_title(title)
+    ax.legend(fontsize=9)
+    ax.grid(True, linestyle="--", alpha=0.4)
+    plt.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+
+
+def _plot_pr_curve_multiclass(y_true, y_probs, names, path, title=""):
+    """Per-class PR curves for multi-label / multi-class (Stage 2 & E2E)."""
+    n = y_true.shape[1]
+    palette = plt.cm.get_cmap("tab10", n)
+    fig, ax = plt.subplots(figsize=(8, 6))
+    for i, name in enumerate(names):
+        precision, recall, _ = precision_recall_curve(y_true[:, i], y_probs[:, i])
+        ap = average_precision_score(y_true[:, i], y_probs[:, i])
+        ax.plot(recall, precision, color=palette(i), linewidth=1.8,
+                label=f"{name}  AP={ap:.2f}")
+    ax.set_xlabel("Recall")
+    ax.set_ylabel("Precision")
+    ax.set_xlim(0, 1.02)
+    ax.set_ylim(0, 1.05)
+    ax.set_title(title)
+    ax.legend(fontsize=8, loc="lower left")
+    ax.grid(True, linestyle="--", alpha=0.4)
+    plt.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+
+
+def _plot_confusion_multilabel(y_true, y_pred, names, path, title=""):
+    """Per-class confusion matrix (2×2) tiled in a grid for multi-label."""
+    n = len(names)
+    cols = min(3, n)
+    rows = (n + cols - 1) // cols
+    fig, axes = plt.subplots(rows, cols, figsize=(cols * 3.5, rows * 3.2))
+    axes = np.array(axes).flatten()
+    for i, name in enumerate(names):
+        cm = confusion_matrix(y_true[:, i], y_pred[:, i])
+        norm = cm.astype(float) / cm.sum(axis=1, keepdims=True).clip(min=1)
+        ax = axes[i]
+        ax.imshow(norm, cmap="Blues", vmin=0, vmax=1)
+        for r in range(2):
+            for c in range(2):
+                ax.text(c, r, str(cm[r, c]), ha="center", va="center",
+                        fontsize=9, color="white" if norm[r, c] > 0.5 else "black")
+        ax.set_xticks([0, 1]); ax.set_yticks([0, 1])
+        ax.set_xticklabels(["Pred 0", "Pred 1"], fontsize=7)
+        ax.set_yticklabels(["True 0", "True 1"], fontsize=7)
+        ax.set_title(name, fontsize=9)
+    for j in range(i + 1, len(axes)):
+        axes[j].set_visible(False)
+    fig.suptitle(title, fontsize=11)
+    plt.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+
+
 # =============================================================================
 #  Inference helper
 # =============================================================================
@@ -270,6 +340,9 @@ def evaluate_stage1(
     _plot_confusion(cm, ["neutral", "has_emotion"],
                     os.path.join(out_dir, "stage1_confusion.png"),
                     "Stage 1 Confusion Matrix (test set)")
+    _plot_pr_curve_binary(y_true, tp.flatten(),
+                          os.path.join(out_dir, "stage1_pr_curve.png"),
+                          "Stage 1 PR Curve — has_emotion (test set)")
     _plot_f1_bar(
         [f1_score(y_true, y_pred, pos_label=0, zero_division=0), f1],
         ["neutral", "has_emotion"],
@@ -377,6 +450,12 @@ def evaluate_stage2(
     _plot_heatmap(tp, tl, EMOTION_NAMES,
                   os.path.join(out_dir, "stage2_heatmap.png"),
                   title="Stage 2 Predicted Probabilities (test subset)")
+    _plot_pr_curve_multiclass(tl, tp, EMOTION_NAMES,
+                              os.path.join(out_dir, "stage2_pr_curve.png"),
+                              "Stage 2 Per-Class PR Curves (emotion-only test set)")
+    _plot_confusion_multilabel(tl, preds, EMOTION_NAMES,
+                               os.path.join(out_dir, "stage2_confusion.png"),
+                               "Stage 2 Per-Class Confusion Matrices (test set)")
     print(f"[test] Saved → {out_dir}")
 
     return {"micro_f1": micro_f1, "macro_f1": macro_f1, "weighted_f1": weighted_f1,
@@ -524,6 +603,32 @@ def evaluate_end_to_end(
     _plot_heatmap(s2_probs, test_labels_6, EMOTION_NAMES,
                   os.path.join(out_dir, "e2e_stage2_heatmap.png"),
                   title="End-to-End Stage2 Probabilities (test subset)")
+
+    # Build 7-dim probability matrix for PR/CM plots
+    # cols 0-5 = s2_probs; col 6 = 1 - s1_probs (neutral probability)
+    s1_neutral_prob = 1.0 - s1_probs          # higher → more likely neutral
+    y_probs_7 = np.concatenate(
+        [s2_probs, s1_neutral_prob[:, None]], axis=1
+    )
+    _plot_pr_curve_multiclass(y_true_7, y_probs_7, ALL_CLASS_NAMES,
+                              os.path.join(out_dir, "e2e_pr_curve.png"),
+                              "End-to-End Per-Class PR Curves (7 classes, full test set)")
+    _plot_confusion_multilabel(y_true_7, y_pred_7, ALL_CLASS_NAMES,
+                               os.path.join(out_dir, "e2e_confusion.png"),
+                               "End-to-End Per-Class Confusion Matrices (test set)")
+    # Also save a single aggregated 7-class confusion matrix
+    # (argmax prediction for samples predicted as exactly one class)
+    y_true_single = np.argmax(y_true_7, axis=1)
+    y_pred_single = np.argmax(y_pred_7, axis=1)
+    # Only use rows where ground-truth has exactly one active label
+    single_mask = y_true_7.sum(axis=1) == 1
+    if single_mask.sum() > 0:
+        cm7 = confusion_matrix(y_true_single[single_mask],
+                               y_pred_single[single_mask],
+                               labels=list(range(7)))
+        _plot_confusion(cm7, ALL_CLASS_NAMES,
+                        os.path.join(out_dir, "e2e_confusion_aggregate.png"),
+                        "End-to-End Aggregated Confusion Matrix (single-label samples)")
     print(f"[test] Saved → {out_dir}")
 
     return {"micro_f1": micro_f1, "macro_f1": macro_f1, "weighted_f1": weighted_f1,
