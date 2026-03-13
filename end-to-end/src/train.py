@@ -250,11 +250,17 @@ def train(
     amp_dtype_str = BACKBONE_REGISTRY.get(model_key, {}).get("amp_dtype", "float16")
 
     if device.type == "cuda" and amp_dtype_str == "bfloat16":
-        use_amp, amp_dtype, use_scaler = True, torch.bfloat16, False
+        use_amp    = True
+        amp_dtype  = torch.bfloat16
+        use_scaler = False 
     elif device.type == "cuda":
-        use_amp, amp_dtype, use_scaler = True, torch.float16, True
+        use_amp    = True
+        amp_dtype  = torch.float16
+        use_scaler = True
     else:
-        use_amp, amp_dtype, use_scaler = False, torch.float32, False
+        use_amp    = False
+        amp_dtype  = torch.float32
+        use_scaler = False
 
     # ── Run directory ─────────────────────────────────────────────────────────
     if run_dir is None:
