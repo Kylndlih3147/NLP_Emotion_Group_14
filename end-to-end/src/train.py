@@ -181,7 +181,7 @@ def _run_epoch(
                     scaler.unscale_(optimizer)
                     grad_norm = nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                     if torch.isnan(grad_norm) or torch.isinf(grad_norm):
-                        print(f"\n[WARNING] NaN/Inf gradient (norm={grad_norm:.4f}) — skipping batch, resetting scaler")
+                        print(f"\nNaN/Inf gradient (norm={grad_norm:.4f}) — skipping batch, resetting scaler. Đây là tính năng, ko phải bug :)")
                         optimizer.zero_grad(set_to_none=True)
                         scaler.update()  # scaler tự giảm scale factor, KHÔNG step optimizer
                         continue
@@ -189,7 +189,8 @@ def _run_epoch(
                     scaler.update()
                 else:
                     loss.backward()
-                    grad_norm = nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                    clip = 0.3 if amp_dtype == torch.bfloat16 else 1.0
+                    grad_norm = nn.utils.clip_grad_norm_(model.parameters(), clip)
                     if torch.isnan(grad_norm) or torch.isinf(grad_norm):
                         print(f"\n[WARNING] NaN/Inf gradient — skipping batch")
                         optimizer.zero_grad(set_to_none=True)
@@ -249,11 +250,17 @@ def train(
     amp_dtype_str = BACKBONE_REGISTRY.get(model_key, {}).get("amp_dtype", "float16")
 
     if device.type == "cuda" and amp_dtype_str == "bfloat16":
-        use_amp, amp_dtype, use_scaler = True, torch.bfloat16, True
+        use_amp    = True
+        amp_dtype  = torch.bfloat16
+        use_scaler = False 
     elif device.type == "cuda":
-        use_amp, amp_dtype, use_scaler = True, torch.float16, True
+        use_amp    = True
+        amp_dtype  = torch.float16
+        use_scaler = True
     else:
-        use_amp, amp_dtype, use_scaler = False, torch.float32, False
+        use_amp    = False
+        amp_dtype  = torch.float32
+        use_scaler = False
 
     # ── Run directory ─────────────────────────────────────────────────────────
     if run_dir is None:
@@ -353,14 +360,9 @@ def train(
                 "num_labels":      num_labels,
                 "tier_indices":    tier_indices,
                 "model_state":     model.state_dict(),
-                "optimizer":       optimizer.state_dict(),
-                "scheduler":       scheduler.state_dict() if scheduler else None,
                 "val_macro_f1":    best_val_macro_f1,
                 "val_metrics":     best_metrics,
                 "threshold":       threshold,
-                "cfg":             cfg,
-                "run_dir":         run_dir,
-                "run_name":        run_name,
             }, ckpt_path)
             print(f"  ✓ Checkpoint saved → {ckpt_path}")
         else:
